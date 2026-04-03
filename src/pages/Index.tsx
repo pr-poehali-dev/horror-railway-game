@@ -36,6 +36,14 @@ class AudioEngine {
   private alarmInterval: ReturnType<typeof setInterval> | null = null;
   private windInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Train engine nodes — sustained rumble while approaching
+  private trainRumbleNodes: { osc: OscillatorNode; gain: GainNode }[] = [];
+  private trainRumbleInterval: ReturnType<typeof setInterval> | null = null;
+
+  // Siren nodes
+  private sirenOsc: OscillatorNode | null = null;
+  private sirenGain: GainNode | null = null;
+
   init() {
     if (!this.ctx) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,14 +76,19 @@ class AudioEngine {
     osc.stop(ctx.currentTime + duration);
   }
 
-  playNoise(duration: number, vol = 1) {
+  private makeNoiseBuf(duration: number): AudioBuffer {
     const ctx = this.getCtx();
     const bufSize = ctx.sampleRate * duration;
     const buf = ctx.createBuffer(1, bufSize, ctx.sampleRate);
     const data = buf.getChannelData(0);
     for (let i = 0; i < bufSize; i++) data[i] = Math.random() * 2 - 1;
+    return buf;
+  }
+
+  playNoise(duration: number, vol = 1) {
+    const ctx = this.getCtx();
     const src = ctx.createBufferSource();
-    src.buffer = buf;
+    src.buffer = this.makeNoiseBuf(duration);
     const gain = ctx.createGain();
     gain.gain.setValueAtTime(this.volume * vol * 0.15, ctx.currentTime);
     gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + duration);
@@ -84,48 +97,226 @@ class AudioEngine {
     src.start();
   }
 
-  playTrainApproach() {
+  // ─── TRAIN ENGINE — realistic rolling rumble + wheel clatter ─────────────
+  startTrainRumble() {
+    this.stopTrainRumble();
     const ctx = this.getCtx();
-    for (let i = 0; i < 3; i++) {
+
+    // Layer 1: low engine drone
+    const drone = ctx.createOscillator();
+    const droneGain = ctx.createGain();
+    drone.type = 'sawtooth';
+    drone.frequency.value = 28;
+    droneGain.gain.setValueAtTime(0, ctx.currentTime);
+    droneGain.gain.linearRampToValueAtTime(this.volume * 0.18, ctx.currentTime + 2);
+    drone.connect(droneGain);
+    droneGain.connect(ctx.destination);
+    drone.start();
+    this.trainRumbleNodes.push({ osc: drone, gain: droneGain });
+
+    // Layer 2: mid rumble
+    const mid = ctx.createOscillator();
+    const midGain = ctx.createGain();
+    mid.type = 'sawtooth';
+    mid.frequency.value = 55;
+    midGain.gain.setValueAtTime(0, ctx.currentTime);
+    midGain.gain.linearRampToValueAtTime(this.volume * 0.10, ctx.currentTime + 1.5);
+    mid.connect(midGain);
+    midGain.connect(ctx.destination);
+    mid.start();
+    this.trainRumbleNodes.push({ osc: mid, gain: midGain });
+
+    // Layer 3: high-freq mechanical buzz
+    const buzz = ctx.createOscillator();
+    const buzzGain = ctx.createGain();
+    buzz.type = 'square';
+    buzz.frequency.value = 110;
+    buzzGain.gain.setValueAtTime(0, ctx.currentTime);
+    buzzGain.gain.linearRampToValueAtTime(this.volume * 0.04, ctx.currentTime + 1);
+    buzz.connect(buzzGain);
+    buzzGain.connect(ctx.destination);
+    buzz.start();
+    this.trainRumbleNodes.push({ osc: buzz, gain: buzzGain });
+
+    // Wheel clatter — periodic noise bursts
+    this.trainRumbleInterval = setInterval(() => {
+      const nSrc = ctx.createBufferSource();
+      nSrc.buffer = this.makeNoiseBuf(0.06);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(this.volume * 0.22, ctx.currentTime);
+      nGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
+      nSrc.connect(nGain);
+      nGain.connect(ctx.destination);
+      nSrc.start();
+    }, 180 + Math.random() * 80);
+  }
+
+  // Grow rumble louder as train approaches (call with 0..1)
+  setTrainRumbleVolume(t: number) {
+    const ctx = this.getCtx();
+    const vols = [0.18, 0.10, 0.04];
+    this.trainRumbleNodes.forEach(({ gain }, i) => {
+      gain.gain.setTargetAtTime(this.volume * vols[i] * t, ctx.currentTime, 0.3);
+    });
+  }
+
+  stopTrainRumble() {
+    if (this.trainRumbleInterval) {
+      clearInterval(this.trainRumbleInterval);
+      this.trainRumbleInterval = null;
+    }
+    this.trainRumbleNodes.forEach(({ osc, gain }) => {
+      const ctx = this.getCtx();
+      gain.gain.setTargetAtTime(0, ctx.currentTime, 0.2);
+      setTimeout(() => { try { osc.stop(); } catch(_e) { /* ignore */ } }, 500);
+    });
+    this.trainRumbleNodes = [];
+  }
+
+  // ─── TRAIN HORN — реалистичный гудок (chord) ──────────────────────────────
+  playTrainHorn() {
+    const ctx = this.getCtx();
+    // Three-note chord like real locomotive horn
+    const freqs = [110, 138.6, 174.6]; // A2 + C#3 + F3
+    freqs.forEach((freq, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
+      osc.type = 'sawtooth';
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(this.volume * (0.25 - i * 0.05), ctx.currentTime + 0.08);
+      gain.gain.setValueAtTime(this.volume * (0.25 - i * 0.05), ctx.currentTime + 1.2);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.8);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.type = 'sawtooth';
-      osc.frequency.value = 40 + i * 15;
-      gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.1);
-      gain.gain.linearRampToValueAtTime(this.volume * 0.1, ctx.currentTime + 0.5);
-      gain.gain.linearRampToValueAtTime(0.001, ctx.currentTime + 2.5);
-      osc.start(ctx.currentTime + i * 0.1);
-      osc.stop(ctx.currentTime + 3);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 2);
+    });
+    // Short doppler-down at end
+    setTimeout(() => {
+      const osc2 = ctx.createOscillator();
+      const g2 = ctx.createGain();
+      osc2.type = 'sawtooth';
+      osc2.frequency.setValueAtTime(110, ctx.currentTime);
+      osc2.frequency.exponentialRampToValueAtTime(70, ctx.currentTime + 0.6);
+      g2.gain.setValueAtTime(this.volume * 0.15, ctx.currentTime);
+      g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      osc2.connect(g2);
+      g2.connect(ctx.destination);
+      osc2.start(ctx.currentTime);
+      osc2.stop(ctx.currentTime + 0.7);
+    }, 1500);
+  }
+
+  // ─── SIREN — wailing emergency siren ─────────────────────────────────────
+  startSiren() {
+    this.stopSiren();
+    const ctx = this.getCtx();
+    this.sirenOsc = ctx.createOscillator();
+    this.sirenGain = ctx.createGain();
+
+    this.sirenOsc.type = 'sawtooth';
+    this.sirenOsc.frequency.value = 440;
+    this.sirenGain.gain.value = this.volume * 0.4;
+
+    // Wail up and down
+    const wail = () => {
+      if (!this.sirenOsc) return;
+      const now = ctx.currentTime;
+      this.sirenOsc.frequency.setValueAtTime(360, now);
+      this.sirenOsc.frequency.linearRampToValueAtTime(780, now + 0.6);
+      this.sirenOsc.frequency.linearRampToValueAtTime(360, now + 1.2);
+    };
+    wail();
+    this.alarmInterval = setInterval(wail, 1200);
+
+    this.sirenOsc.connect(this.sirenGain);
+    this.sirenGain.connect(ctx.destination);
+    this.sirenOsc.start();
+  }
+
+  stopSiren() {
+    if (this.alarmInterval) { clearInterval(this.alarmInterval); this.alarmInterval = null; }
+    if (this.sirenOsc) {
+      const ctx = this.getCtx();
+      if (this.sirenGain) {
+        this.sirenGain.gain.setTargetAtTime(0, ctx.currentTime, 0.2);
+      }
+      setTimeout(() => { try { this.sirenOsc?.stop(); } catch(_e) { /* ignore */ } this.sirenOsc = null; this.sirenGain = null; }, 400);
     }
   }
 
-  playTrainHorn() {
-    this.playTone(220, 0.8, 'sawtooth', 0.6);
-    setTimeout(() => this.playTone(165, 0.5, 'sawtooth', 0.4), 900);
-  }
+  stopAlarm() { this.stopSiren(); }
 
-  playAlarmSound() {
-    this.stopAlarm();
-    let toggle = true;
-    this.alarmInterval = setInterval(() => {
-      this.playTone(toggle ? 880 : 660, 0.25, 'square', 0.5);
-      toggle = !toggle;
-    }, 300);
-  }
+  // ─── ALARM BUTTON CONFIRM ─────────────────────────────────────────────────
+  playAlarmSound() { this.startSiren(); }
 
-  stopAlarm() {
-    if (this.alarmInterval) {
-      clearInterval(this.alarmInterval);
-      this.alarmInterval = null;
-    }
-  }
-
+  // ─── FEMALE SCREAM — synthesised, piercing ────────────────────────────────
   playScreamer() {
-    this.playNoise(0.5, 2);
-    this.playTone(150, 0.8, 'sawtooth', 1.5);
-    setTimeout(() => this.playTone(80, 0.5, 'sine', 1), 200);
+    const ctx = this.getCtx();
+
+    // Sub boom
+    const boom = ctx.createOscillator();
+    const boomGain = ctx.createGain();
+    boom.type = 'sine';
+    boom.frequency.setValueAtTime(60, ctx.currentTime);
+    boom.frequency.exponentialRampToValueAtTime(20, ctx.currentTime + 0.5);
+    boomGain.gain.setValueAtTime(this.volume * 0.9, ctx.currentTime);
+    boomGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    boom.connect(boomGain); boomGain.connect(ctx.destination);
+    boom.start(); boom.stop(ctx.currentTime + 0.6);
+
+    // Female scream — high formant sweep
+    const screamFreqs = [
+      { t: 0,    f: 900  },
+      { t: 0.05, f: 1400 },
+      { t: 0.15, f: 1800 },
+      { t: 0.35, f: 2200 },
+      { t: 0.55, f: 1600 },
+      { t: 0.8,  f: 1000 },
+      { t: 1.0,  f: 600  },
+      { t: 1.4,  f: 300  },
+    ];
+    [0, 3, 7].forEach(detune => {
+      const sc = ctx.createOscillator();
+      const scGain = ctx.createGain();
+      sc.type = 'sawtooth';
+      sc.frequency.value = screamFreqs[0].f + detune;
+      screamFreqs.forEach(({ t, f }) => {
+        sc.frequency.setValueAtTime(f + detune, ctx.currentTime + t);
+      });
+      scGain.gain.setValueAtTime(0, ctx.currentTime);
+      scGain.gain.linearRampToValueAtTime(this.volume * (0.35 - detune * 0.01), ctx.currentTime + 0.05);
+      scGain.gain.setValueAtTime(this.volume * (0.35 - detune * 0.01), ctx.currentTime + 0.8);
+      scGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.6);
+      sc.connect(scGain); scGain.connect(ctx.destination);
+      sc.start(ctx.currentTime); sc.stop(ctx.currentTime + 1.7);
+    });
+
+    // Breath noise underneath
+    const ns = ctx.createBufferSource();
+    ns.buffer = this.makeNoiseBuf(1.5);
+    const nsFilter = ctx.createBiquadFilter();
+    nsFilter.type = 'bandpass';
+    nsFilter.frequency.value = 2000;
+    nsFilter.Q.value = 0.5;
+    const nsGain = ctx.createGain();
+    nsGain.gain.setValueAtTime(this.volume * 0.3, ctx.currentTime);
+    nsGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.5);
+    ns.connect(nsFilter); nsFilter.connect(nsGain); nsGain.connect(ctx.destination);
+    ns.start();
+
+    // High distortion overtone screech
+    const screech = ctx.createOscillator();
+    const screechGain = ctx.createGain();
+    screech.type = 'square';
+    screech.frequency.setValueAtTime(3400, ctx.currentTime + 0.1);
+    screech.frequency.linearRampToValueAtTime(800, ctx.currentTime + 1.2);
+    screechGain.gain.setValueAtTime(0, ctx.currentTime + 0.1);
+    screechGain.gain.linearRampToValueAtTime(this.volume * 0.12, ctx.currentTime + 0.2);
+    screechGain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+    screech.connect(screechGain); screechGain.connect(ctx.destination);
+    screech.start(ctx.currentTime + 0.1); screech.stop(ctx.currentTime + 1.3);
   }
 
   playButtonClick() {
@@ -139,29 +330,64 @@ class AudioEngine {
   }
 
   playAnomalyDetected() {
-    this.playNoise(0.2, 0.8);
-    this.playTone(300, 0.3, 'sawtooth', 0.5);
+    // Unsettling chord stab
+    const ctx = this.getCtx();
+    [200, 267, 300].forEach((f, i) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sawtooth';
+      o.frequency.value = f;
+      g.gain.setValueAtTime(this.volume * 0.2, ctx.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+      o.connect(g); g.connect(ctx.destination);
+      o.start(ctx.currentTime + i * 0.02);
+      o.stop(ctx.currentTime + 0.6);
+    });
+    this.playNoise(0.15, 0.6);
   }
 
+  // ─── AMBIENT — night wind + distant rails hum ─────────────────────────────
   startAmbient() {
     this.stopAmbient();
     const ctx = this.getCtx();
+
+    // Low 50Hz building hum
     this.ambientNode = ctx.createOscillator();
     this.ambientGain = ctx.createGain();
     this.ambientNode.type = 'sine';
-    this.ambientNode.frequency.value = 60;
-    this.ambientGain.gain.value = this.ambVol * 0.04;
+    this.ambientNode.frequency.value = 50;
+    this.ambientGain.gain.value = this.ambVol * 0.05;
     this.ambientNode.connect(this.ambientGain);
     this.ambientGain.connect(ctx.destination);
     this.ambientNode.start();
+
+    // Wind gusts
     this.windInterval = setInterval(() => {
-      this.playNoise(1.5, 0.05 + Math.random() * 0.1);
-    }, 3000 + Math.random() * 4000);
+      const ns = ctx.createBufferSource();
+      ns.buffer = this.makeNoiseBuf(2 + Math.random() * 2);
+      const filt = ctx.createBiquadFilter();
+      filt.type = 'bandpass';
+      filt.frequency.value = 400 + Math.random() * 300;
+      filt.Q.value = 0.3;
+      const ng = ctx.createGain();
+      const vol = this.ambVol * (0.04 + Math.random() * 0.06);
+      ng.gain.setValueAtTime(0, ctx.currentTime);
+      ng.gain.linearRampToValueAtTime(vol, ctx.currentTime + 0.5);
+      ng.gain.linearRampToValueAtTime(0, ctx.currentTime + 1.5 + Math.random());
+      ns.connect(filt); filt.connect(ng); ng.connect(ctx.destination);
+      ns.start();
+    }, 3000 + Math.random() * 5000);
   }
 
   stopAmbient() {
     if (this.ambientNode) { try { this.ambientNode.stop(); } catch(_e) { /* ignore */ } this.ambientNode = null; }
     if (this.windInterval) { clearInterval(this.windInterval); this.windInterval = null; }
+  }
+
+  stopAll() {
+    this.stopTrainRumble();
+    this.stopSiren();
+    this.stopAmbient();
   }
 }
 
@@ -261,6 +487,7 @@ export default function Index() {
   }, [screen]);
 
   const triggerGameOver = useCallback(() => {
+    audio.stopTrainRumble();
     audio.stopAlarm();
     audio.stopAmbient();
     audio.playScreamer();
@@ -287,7 +514,8 @@ export default function Index() {
         ? ANOMALY_TYPES[Math.floor(Math.random() * ANOMALY_TYPES.length)]
         : 'none';
 
-      audio.playTrainApproach();
+      // Start train rumble sound
+      audio.startTrainRumble();
 
       setGameState(s => ({
         ...s,
@@ -308,7 +536,10 @@ export default function Index() {
       let progress = 0;
       approachRef.current = setInterval(() => {
         progress += 4;
-        setGameState(s => ({ ...s, trainApproach: Math.min(progress, 100) }));
+        const clamped = Math.min(progress, 100);
+        // Grow rumble volume as train approaches
+        audio.setTrainRumbleVolume(clamped / 100);
+        setGameState(s => ({ ...s, trainApproach: clamped }));
         if (progress >= 100) {
           clearInterval(approachRef.current!);
           audio.playTrainHorn();
@@ -319,8 +550,10 @@ export default function Index() {
             if (st.anomalyType !== 'none' && !st.alarmActive) {
               addLog('АНОМАЛИЯ ПРОПУЩЕНА! УГРОЗА!', 'error');
               setGameState(s => ({ ...s, anomaliesMissed: s.anomaliesMissed + 1 }));
+              audio.stopTrainRumble();
               triggerGameOver();
             } else {
+              audio.stopTrainRumble();
               setGameState(s => ({
                 ...s,
                 trainVisible: false,
@@ -368,6 +601,7 @@ export default function Index() {
       setTimeLeft(t => {
         if (t <= 1) {
           clearInterval(timerRef.current!);
+          audio.stopTrainRumble();
           audio.playSuccess();
           audio.stopAmbient();
           setTimeout(() => setScreen('menu'), 500);
@@ -394,6 +628,7 @@ export default function Index() {
       if (anomalyTimerRef.current) { clearTimeout(anomalyTimerRef.current); anomalyTimerRef.current = null; }
       setTimeout(() => {
         audio.stopAlarm();
+        audio.stopTrainRumble();
         setShowAlarmBar(false);
         setAlarmSuccess(false);
         setGameState(s => ({
@@ -419,6 +654,7 @@ export default function Index() {
       if (anomalyTimerRef.current) { clearTimeout(anomalyTimerRef.current); anomalyTimerRef.current = null; }
       triggerGameOver();
     } else {
+      audio.stopTrainRumble();
       audio.playTone(440, 0.1, 'sine', 0.3);
       addLog(`Поезд №${Math.floor(Math.random() * 900) + 100} — норма, отмечен`);
       if (anomalyTimerRef.current) { clearTimeout(anomalyTimerRef.current); anomalyTimerRef.current = null; }
@@ -436,8 +672,7 @@ export default function Index() {
   };
 
   const exitGame = () => {
-    audio.stopAlarm();
-    audio.stopAmbient();
+    audio.stopAll();
     if (timerRef.current) clearInterval(timerRef.current);
     if (trainTimerRef.current) clearTimeout(trainTimerRef.current);
     if (anomalyTimerRef.current) clearTimeout(anomalyTimerRef.current);

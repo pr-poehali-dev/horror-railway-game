@@ -599,6 +599,11 @@ export default function Index() {
   );
 
   // === GAME ===
+  // FPS view: player looks out of booth window onto the tracks
+  const fpsTrainZ = 1 - trainApproach / 100; // 1=far, 0=close
+  const fpsTrainScale = 0.08 + (1 - fpsTrainZ) * 0.92;
+  const fpsTrainY = 38 + fpsTrainZ * 12; // % from top of outside world
+
   return (
     <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh', background: '#050508', overflow: 'hidden' }}>
 
@@ -632,222 +637,503 @@ export default function Index() {
         }}>← МЕНЮ</button>
       </div>
 
-      {/* 3D VIEWPORT */}
-      <div className="game-viewport">
-        <div className="sky-bg" />
-        <div className="stars">
+      {/* ===================== FPS GAME WORLD ===================== */}
+      {/* Layer 1 — outside world seen through window */}
+      <div style={{ position: 'absolute', inset: 0 }}>
+
+        {/* SKY — top 58% of screen */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, right: 0, height: '58%',
+          background: 'radial-gradient(ellipse at 40% 30%, #0e1020 0%, #050508 70%)',
+        }}>
           {STARS.map(s => (
             <div key={s.id} className="star" style={{
-              left: `${s.x}%`, top: `${s.y}%`,
+              left: `${s.x}%`, top: `${s.y * 1.6}%`,
               width: s.size, height: s.size,
               animationDelay: `${s.delay}s`, animationDuration: `${s.duration}s`,
             }} />
           ))}
+          {/* Moon */}
+          <div style={{
+            position: 'absolute', top: '12%', right: '18%',
+            width: 55, height: 55, borderRadius: '50%',
+            background: 'radial-gradient(circle at 35% 35%, #f0e8c8, #c8b880)',
+            boxShadow: '0 0 20px rgba(240,220,150,0.4), 0 0 60px rgba(200,180,100,0.12)',
+          }} />
+          {/* Fog at horizon */}
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, height: '40%',
+            background: 'linear-gradient(to top, rgba(60,80,70,0.25) 0%, transparent 100%)',
+          }} />
         </div>
-        <div className="moon" />
 
-        {/* Darkness overlay when lights off */}
-        {!lightsOn && (
-          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.65)', zIndex: 10, pointerEvents: 'none' }} />
-        )}
+        {/* GROUND — bottom 42% */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0, height: '42%',
+          background: 'linear-gradient(to bottom, #0a0e08 0%, #0d1209 40%, #101408 100%)',
+        }} />
 
-        {/* Ground + SVG tracks */}
-        <div className="ground-plane">
-          <svg viewBox="0 0 800 400" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%' }} preserveAspectRatio="none">
-            {/* Left rail */}
-            <path d="M 390 0 L 120 400" stroke="#5a4838" strokeWidth="5" fill="none" />
-            {/* Right rail */}
-            <path d="M 410 0 L 680 400" stroke="#5a4838" strokeWidth="5" fill="none" />
-            {/* Sleepers */}
-            {Array.from({ length: 18 }, (_, i) => {
-              const t = i / 17;
-              const y = t * 400;
-              const xl = 390 - (390 - 120) * t;
-              const xr = 410 + (680 - 410) * t;
-              return (
-                <line key={i} x1={xl - 5} y1={y} x2={xr + 5} y2={y}
-                  stroke="#2a1a0e" strokeWidth={2 + t * 9} opacity={0.35 + t * 0.55} />
-              );
-            })}
-            {/* Ground fog at horizon */}
-            <rect x="0" y="0" width="800" height="40" fill="url(#fogGrad)" opacity="0.5" />
-            <defs>
-              <linearGradient id="fogGrad" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor="#8aabb0" stopOpacity="0.3" />
-                <stop offset="100%" stopColor="#8aabb0" stopOpacity="0" />
-              </linearGradient>
-            </defs>
-          </svg>
+        {/* TRACKS SVG — full screen, perspective from eye level */}
+        <svg
+          viewBox="0 0 1000 600"
+          style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+          preserveAspectRatio="none"
+        >
+          <defs>
+            <linearGradient id="railGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#4a3828" stopOpacity="0.6" />
+              <stop offset="100%" stopColor="#6a5040" stopOpacity="1" />
+            </linearGradient>
+            <linearGradient id="groundFog" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stopColor="#0d1209" />
+              <stop offset="100%" stopColor="#0a0e08" stopOpacity="0" />
+            </linearGradient>
+          </defs>
 
-          {/* TRAIN */}
-          {trainVisible && (
-            <div style={{
-              position: 'absolute',
-              left: '50%',
-              bottom: `${trainBottom}%`,
-              transform: `translateX(-50%) scale(${trainScale}) ${anomalyType === 'reversed' ? 'scaleX(-1)' : ''}`,
-              transformOrigin: 'bottom center',
-              transition: 'scale 0.2s linear, bottom 0.2s linear',
-              zIndex: 20,
-            }}
-              className={anomalyType === 'flying' ? 'train-flying' : anomalyType === 'ghost' ? 'train-ghost' : ''}
+          {/* Ballast / gravel strip */}
+          <polygon points="460,348 540,348 780,600 220,600" fill="#1a1410" opacity="0.8" />
+
+          {/* Left rail */}
+          <path d="M 490 348 L 180 600" stroke="url(#railGrad)" strokeWidth="5" fill="none" strokeLinecap="round" />
+          {/* Right rail */}
+          <path d="M 510 348 L 820 600" stroke="url(#railGrad)" strokeWidth="5" fill="none" strokeLinecap="round" />
+
+          {/* Rail shine */}
+          <path d="M 490 348 L 180 600" stroke="#8a7060" strokeWidth="1.5" fill="none" opacity="0.4" />
+          <path d="M 510 348 L 820 600" stroke="#8a7060" strokeWidth="1.5" fill="none" opacity="0.4" />
+
+          {/* Sleepers — perspective */}
+          {Array.from({ length: 22 }, (_, i) => {
+            const t = Math.pow(i / 21, 0.7);
+            const y = 348 + t * 252;
+            const xl = 490 - (490 - 180) * t;
+            const xr = 510 + (820 - 510) * t;
+            const w = 2 + t * 11;
+            return (
+              <line key={i}
+                x1={xl - 6 * t} y1={y} x2={xr + 6 * t} y2={y}
+                stroke="#251808" strokeWidth={w} opacity={0.3 + t * 0.6}
+              />
+            );
+          })}
+
+          {/* Distance fog on ground */}
+          <rect x="0" y="340" width="1000" height="30" fill="url(#groundFog)" opacity="0.6" />
+
+          {/* Horizon atmospheric haze */}
+          <rect x="0" y="335" width="1000" height="20"
+            fill="rgba(80,110,100,0.12)" />
+        </svg>
+
+        {/* TRAIN — rendered in the outside world */}
+        {trainVisible && (() => {
+          const glowColor = anomalyType === 'ghost' ? '#00ffee' : anomalyType === 'flying' ? '#cc00ff' : '#ff2200';
+          const trainW = Math.round(fpsTrainScale * 460);
+          const trainH = Math.round(fpsTrainScale * 180);
+          const trainLeft = `calc(50% - ${trainW / 2}px)`;
+          const trainTop = `calc(${fpsTrainY}% - ${trainH / 2}px)`;
+
+          return (
+            <div
+              style={{
+                position: 'absolute',
+                left: trainLeft,
+                top: trainTop,
+                width: trainW,
+                height: trainH,
+                transition: 'left 0.15s linear, top 0.15s linear, width 0.15s linear, height 0.15s linear',
+                zIndex: 20,
+              }}
+              className={
+                anomalyType === 'flying' ? 'fps-train-flying' :
+                anomalyType === 'ghost' ? 'fps-train-ghost' : ''
+              }
             >
-              <div className="train-body">
-                <div className="train-window" style={{ left: 12 }} />
-                <div className="train-window" style={{ left: 60 }} />
-                <div className="train-window" style={{ left: 108 }} />
-                <div className="train-headlight" />
+              {/* Train body SVG */}
+              <svg
+                viewBox="0 0 460 180"
+                width={trainW} height={trainH}
+                style={{
+                  transform: anomalyType === 'reversed' ? 'scaleX(-1)' : undefined,
+                  filter: anomalyType === 'ghost' ? 'hue-rotate(180deg) brightness(1.8) blur(1px)' : undefined,
+                  display: 'block',
+                }}
+              >
+                {/* Locomotive body */}
+                <rect x="10" y="30" width="380" height="130" rx="8" fill="#1e1a14" stroke="#2e2820" strokeWidth="2" />
+                {/* Cab */}
+                <rect x="340" y="10" width="110" height="150" rx="6" fill="#252018" stroke="#3a3020" strokeWidth="1.5" />
+                {/* Roof */}
+                <rect x="8" y="28" width="385" height="12" rx="4" fill="#2a2418" />
+                {/* Front face */}
+                <rect x="440" y="30" width="16" height="130" rx="3" fill="#1a1510" />
+
+                {/* Windows cab */}
+                <rect x="355" y="22" width="40" height="30" rx="3" fill="rgba(255,200,80,0.25)" stroke="rgba(200,150,50,0.5)" strokeWidth="1" />
+                <rect x="402" y="22" width="40" height="30" rx="3" fill="rgba(255,200,80,0.25)" stroke="rgba(200,150,50,0.5)" strokeWidth="1" />
+
+                {/* Side windows */}
+                <rect x="50" y="50" width="55" height="45" rx="4" fill="rgba(255,180,60,0.15)" stroke="rgba(180,130,40,0.4)" strokeWidth="1" />
+                <rect x="120" y="50" width="55" height="45" rx="4" fill="rgba(255,180,60,0.15)" stroke="rgba(180,130,40,0.4)" strokeWidth="1" />
+                <rect x="190" y="50" width="55" height="45" rx="4" fill="rgba(255,180,60,0.2)" stroke="rgba(180,130,40,0.4)" strokeWidth="1" />
+                <rect x="260" y="50" width="55" height="45" rx="4" fill="rgba(255,180,60,0.15)" stroke="rgba(180,130,40,0.4)" strokeWidth="1" />
+
+                {/* Headlight */}
+                <circle cx="450" cy="90" r="14" fill="rgba(255,240,160,0.9)" />
+                <circle cx="450" cy="90" r="8" fill="#fff8d0" />
+                {/* Headlight beam */}
+                <ellipse cx="450" cy="90" rx="60" ry="25" fill="rgba(255,220,100,0.06)" />
+
+                {/* Undercarriage */}
+                <rect x="15" y="148" width="440" height="16" rx="2" fill="#151210" stroke="#1e1a14" />
+                {/* Wheels */}
+                {[40, 100, 170, 240, 310, 390].map((cx, i) => (
+                  <g key={i}>
+                    <circle cx={cx} cy="165" r="18" fill="#111" stroke="#2a2018" strokeWidth="2" />
+                    <circle cx={cx} cy="165" r="9" fill="#1a1510" />
+                    <circle cx={cx} cy="165" r="3" fill="#3a3020" />
+                  </g>
+                ))}
+
                 {/* Smokestack */}
-                <div style={{ position: 'absolute', top: -28, left: 18 }}>
-                  {[0, 0.7, 1.4].map((d, i) => (
-                    <div key={i} className="smoke-puff"
-                      style={{ width: 18 + i * 4, height: 18 + i * 4, left: i * 8, animationDelay: `${d}s` }} />
+                <rect x="60" y="12" width="16" height="20" rx="2" fill="#1a1510" stroke="#2a2018" />
+
+                {/* Number plate */}
+                <rect x="50" y="108" width="60" height="20" rx="2" fill="#0a0806" stroke="#2a2018" />
+                <text x="80" y="122" textAnchor="middle" fill="rgba(200,160,60,0.8)" fontSize="11" fontFamily="Oswald">№347</text>
+
+                {/* Anomaly glow overlay */}
+                {isAnomaly && (
+                  <rect x="8" y="8" width="447" height="166" rx="8"
+                    fill="none"
+                    stroke={glowColor}
+                    strokeWidth="3"
+                    opacity="0.8"
+                    style={{ filter: `drop-shadow(0 0 12px ${glowColor})` }}
+                  />
+                )}
+              </svg>
+
+              {/* Headlight cone */}
+              {!isAnomaly && fpsTrainScale > 0.3 && (
+                <div style={{
+                  position: 'absolute',
+                  right: -60,
+                  top: '40%',
+                  width: 80,
+                  height: 40,
+                  background: 'radial-gradient(ellipse at left, rgba(255,220,100,0.25) 0%, transparent 100%)',
+                  pointerEvents: 'none',
+                }} />
+              )}
+
+              {/* Smoke */}
+              {fpsTrainScale > 0.15 && (
+                <div style={{ position: 'absolute', top: -30, left: Math.round(trainW * 0.12) }}>
+                  {[0, 0.8, 1.6].map((d, i) => (
+                    <div key={i} className="smoke-puff" style={{
+                      width: Math.round(fpsTrainScale * 40 + i * 10),
+                      height: Math.round(fpsTrainScale * 40 + i * 10),
+                      left: i * 12,
+                      animationDelay: `${d}s`,
+                    }} />
                   ))}
                 </div>
-                {/* Anomaly glow border */}
-                {isAnomaly && (
-                  <div style={{
-                    position: 'absolute', inset: -5,
-                    border: `2px solid ${anomalyType === 'ghost' ? '#00ffee' : anomalyType === 'flying' ? '#dd00ff' : '#ff2200'}`,
-                    borderRadius: 5,
-                    boxShadow: `0 0 25px ${anomalyType === 'ghost' ? '#00ffee' : anomalyType === 'flying' ? '#dd00ff' : '#ff2200'}`,
-                    pointerEvents: 'none',
-                    animation: 'red-pulse-vignette 0.5s ease-in-out infinite',
-                  }} />
-                )}
-              </div>
+              )}
 
-              {/* Double for MULTIPLE anomaly */}
+              {/* Ghost twin for MULTIPLE */}
               {anomalyType === 'multiple' && (
-                <div className="train-body train-ghost" style={{ position: 'absolute', top: -25, left: 35, opacity: 0.45 }}>
-                  <div className="train-window" style={{ left: 12 }} />
-                  <div className="train-window" style={{ left: 60 }} />
+                <div style={{
+                  position: 'absolute', top: -Math.round(trainH * 0.35),
+                  left: Math.round(trainW * 0.1),
+                  opacity: 0.4,
+                  filter: 'hue-rotate(180deg) brightness(2) blur(2px)',
+                }}>
+                  <svg viewBox="0 0 460 180" width={Math.round(trainW * 0.8)} height={Math.round(trainH * 0.8)}>
+                    <rect x="10" y="30" width="380" height="130" rx="8" fill="#1e1a14" stroke="#00ffee" strokeWidth="3" />
+                    <rect x="340" y="10" width="110" height="150" rx="6" fill="#252018" />
+                  </svg>
                 </div>
               )}
             </div>
-          )}
+          );
+        })()}
 
-          {/* Disappeared anomaly text */}
-          {anomalyType === 'disappeared' && phase === 'anomaly_window' && (
-            <div style={{
-              position: 'absolute', left: '50%', bottom: '50%',
-              transform: 'translateX(-50%)', fontFamily: 'Oswald',
-              fontSize: '0.85rem', letterSpacing: '0.3em', color: 'rgba(200,50,20,0.9)',
-              textTransform: 'uppercase', zIndex: 30, whiteSpace: 'nowrap',
-              animation: 'warning-blink 0.8s steps(1) infinite',
-              textShadow: '0 0 10px rgba(200,50,20,0.6)',
-            }}>??? ПОЕЗД ИСЧЕЗ ???</div>
-          )}
-        </div>
+        {/* DISAPPEARED anomaly — empty tracks hint */}
+        {anomalyType === 'disappeared' && phase === 'anomaly_window' && (
+          <div style={{
+            position: 'absolute', left: '50%', top: '44%',
+            transform: 'translate(-50%, -50%)',
+            fontFamily: 'Oswald', fontSize: 'clamp(0.7rem, 1.5vw, 1rem)',
+            letterSpacing: '0.35em', color: 'rgba(220,40,10,0.95)',
+            textTransform: 'uppercase', zIndex: 30, whiteSpace: 'nowrap',
+            animation: 'warning-blink 0.7s steps(1) infinite',
+            textShadow: '0 0 12px rgba(220,40,10,0.7)',
+            background: 'rgba(5,2,2,0.6)',
+            padding: '8px 18px',
+            border: '1px solid rgba(200,30,10,0.4)',
+          }}>??? ПОЕЗД ИСЧЕЗ ???</div>
+        )}
+
+        {/* Darkness when lights off */}
+        {!lightsOn && (
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'rgba(0,0,0,0.72)',
+            zIndex: 18, pointerEvents: 'none',
+          }} />
+        )}
 
         {/* Anomaly vignette */}
         {isAnomaly && phase === 'anomaly_window' && !alarmSuccess && (
-          <div className="anomaly-effect red-vignette" />
+          <div className="anomaly-effect red-vignette" style={{ zIndex: 19 }} />
         )}
+      </div>
 
-        {/* === BOOTH FRAME === */}
-        <div className="booth-overlay">
-          {/* Window frame edges */}
-          <div className="booth-window" />
-          <div className="booth-left" />
-          <div className="booth-right" />
+      {/* ===================== BOOTH INTERIOR — FPS FRAME ===================== */}
+      {/* This overlays the outside world as if you're sitting inside the booth */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 30 }}>
 
-          {/* Stool visible at bottom of window */}
-          <div style={{ position: 'absolute', bottom: '40%', left: '50%', transform: 'translateX(-50%)', zIndex: 5, pointerEvents: 'none' }}>
-            <div className="stool-seat" />
-            <div className="stool-leg" />
+        {/* LEFT WALL of booth */}
+        <div style={{
+          position: 'absolute', top: 0, left: 0, bottom: 0,
+          width: '18%',
+          background: 'linear-gradient(to right, #0c0a07 60%, rgba(12,10,7,0) 100%)',
+          pointerEvents: 'none',
+        }}>
+          {/* Wall texture boards */}
+          {[0,1,2,3].map(i => (
+            <div key={i} style={{
+              position: 'absolute', top: `${i * 25}%`, left: 0, right: 0,
+              borderBottom: '1px solid rgba(50,35,15,0.3)',
+            }} />
+          ))}
+          {/* Coat hook */}
+          <div style={{ position: 'absolute', top: '18%', right: 24, width: 8, height: 20, background: '#3a2a18', borderRadius: '0 0 4px 4px', border: '1px solid #5a3a20' }} />
+          {/* Calendar on wall */}
+          <div style={{
+            position: 'absolute', top: '28%', right: 10,
+            width: 44, height: 55, background: '#f0ead8',
+            border: '2px solid #4a3020', transform: 'rotate(-1deg)',
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', pointerEvents: 'none',
+          }}>
+            <div style={{ fontSize: 9, fontFamily: 'Oswald', color: '#cc2200', letterSpacing: '0.05em' }}>ОКТ</div>
+            <div style={{ fontSize: 18, fontFamily: 'Oswald', color: '#1a1000', fontWeight: 700, lineHeight: 1 }}>13</div>
+            <div style={{ fontSize: 7, color: '#666', marginTop: 2 }}>2037</div>
+          </div>
+        </div>
+
+        {/* RIGHT WALL of booth */}
+        <div style={{
+          position: 'absolute', top: 0, right: 0, bottom: 0,
+          width: '18%',
+          background: 'linear-gradient(to left, #0c0a07 60%, rgba(12,10,7,0) 100%)',
+          pointerEvents: 'none',
+        }}>
+          {[0,1,2,3].map(i => (
+            <div key={i} style={{
+              position: 'absolute', top: `${i * 25}%`, left: 0, right: 0,
+              borderBottom: '1px solid rgba(50,35,15,0.3)',
+            }} />
+          ))}
+          {/* Radio / intercom unit */}
+          <div style={{
+            position: 'absolute', top: '15%', left: 10,
+            width: 55, height: 70, background: '#1a1510',
+            border: '1px solid #2a2018', padding: 6,
+          }}>
+            <div style={{ fontSize: 6, fontFamily: 'Oswald', color: 'rgba(180,140,60,0.6)', letterSpacing: '0.2em', textTransform: 'uppercase', marginBottom: 4 }}>Связь</div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {['#22aa44','#cc2200','#ddaa00'].map((c, i) => (
+                <div key={i} style={{ width: 8, height: 8, borderRadius: '50%', background: c, boxShadow: `0 0 4px ${c}` }} />
+              ))}
+            </div>
+            <div style={{ marginTop: 6, height: 20, background: '#050403', border: '1px solid #2a2018', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontFamily: 'Oswald', fontSize: 7, color: 'rgba(80,200,80,0.8)' }}>ОК</span>
+            </div>
+          </div>
+          {/* Window latch */}
+          <div style={{ position: 'absolute', top: '55%', left: 18, width: 12, height: 30, background: '#3a2a18', borderRadius: 2, border: '1px solid #5a3a20' }} />
+        </div>
+
+        {/* TOP of booth (ceiling strip) */}
+        <div style={{
+          position: 'absolute', top: 0, left: '18%', right: '18%',
+          height: '5%',
+          background: 'linear-gradient(to bottom, #0c0a07 0%, rgba(12,10,7,0) 100%)',
+        }}>
+          {/* Ceiling lamp */}
+          <div style={{
+            position: 'absolute', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+            width: 30, height: 12, background: lightsOn ? '#ddcc80' : '#2a2018',
+            boxShadow: lightsOn ? '0 0 20px 10px rgba(220,200,100,0.25)' : 'none',
+            borderRadius: '0 0 4px 4px',
+            transition: 'all 0.3s',
+          }} />
+        </div>
+
+        {/* WINDOW FRAME — the wooden frame around the view */}
+        {/* Top beam */}
+        <div style={{
+          position: 'absolute', top: '5%', left: '18%', right: '18%',
+          height: 18,
+          background: 'linear-gradient(to bottom, #3a2a18, #2a1e10)',
+          borderBottom: '2px solid #4a3020',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.6)',
+        }} />
+        {/* Bottom sill */}
+        <div style={{
+          position: 'absolute', top: '62%', left: '18%', right: '18%',
+          height: 22,
+          background: 'linear-gradient(to bottom, #2a1e10, #3a2a18)',
+          borderTop: '2px solid #4a3020',
+          borderBottom: '2px solid #1a1208',
+          boxShadow: '0 -4px 12px rgba(0,0,0,0.5)',
+        }} />
+        {/* Left frame post */}
+        <div style={{
+          position: 'absolute', top: '5%', bottom: '38%', left: '18%',
+          width: 16,
+          background: 'linear-gradient(to right, #3a2a18, #2a1e10)',
+          borderRight: '2px solid #4a3020',
+        }} />
+        {/* Right frame post */}
+        <div style={{
+          position: 'absolute', top: '5%', bottom: '38%', right: '18%',
+          width: 16,
+          background: 'linear-gradient(to left, #3a2a18, #2a1e10)',
+          borderLeft: '2px solid #4a3020',
+        }} />
+
+        {/* Booth interior floor area (bottom 38%) */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          height: '38%',
+          background: 'linear-gradient(to top, #090807 0%, #110e0a 55%, rgba(10,8,6,0.97) 100%)',
+          borderTop: '2px solid #2a2018',
+          pointerEvents: 'all',
+        }}>
+          {/* Floor boards texture */}
+          {[0,1,2].map(i => (
+            <div key={i} style={{
+              position: 'absolute', top: 0, bottom: 0,
+              left: `${20 + i * 30}%`,
+              borderLeft: '1px solid rgba(40,30,15,0.2)',
+            }} />
+          ))}
+
+          {/* DESK SURFACE */}
+          <div style={{
+            position: 'absolute', top: 0, left: '12%', right: '12%',
+            height: 8,
+            background: 'linear-gradient(to bottom, #2a2218, #1a1610)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+          }} />
+        </div>
+
+        {/* CONTROL PANEL inside the booth — takes bottom 38% */}
+        <div style={{
+          position: 'absolute', bottom: 0, left: 0, right: 0,
+          height: '38%',
+          display: 'flex',
+          flexDirection: 'column',
+          padding: '10px 5% 12px',
+          pointerEvents: 'all',
+          zIndex: 40,
+        }}>
+          {/* Panel header */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 12,
+            marginBottom: 8, paddingBottom: 6,
+            borderBottom: '1px solid rgba(80,60,28,0.35)',
+          }}>
+            <span style={{ fontFamily: 'Oswald', fontSize: '0.6rem', letterSpacing: '0.3em', textTransform: 'uppercase', color: 'rgba(180,140,70,0.45)' }}>
+              Пульт управления · Будка №3 · Перегон Тьма–Светлый
+            </span>
+            <span style={{ fontFamily: 'Oswald', fontSize: '1.15rem', color: '#ff4400', letterSpacing: '0.1em', textShadow: '0 0 10px rgba(255,60,0,0.5)', marginLeft: 'auto' }}>
+              {clock}
+            </span>
           </div>
 
-          <div className="booth-bottom" />
+          {/* Main controls row */}
+          <div style={{ display: 'flex', gap: 14, flex: 1, alignItems: 'flex-start' }}>
 
-          {/* === CONTROL PANEL === */}
-          <div className="control-panel">
-            <div className="panel-top-bar">
-              <span className="panel-title">Пульт управления · Будка №3 · Перегон Тьма–Светлый</span>
-              <span className="panel-clock">{clock}</span>
+            {/* Indicators */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7, alignItems: 'center', minWidth: 44 }}>
+              {[
+                { label: 'Поезд', cls: phase === 'approaching' || phase === 'anomaly_window' ? 'amber-on' : 'green-on' },
+                { label: 'Тревога', cls: isAnomaly && phase === 'anomaly_window' ? 'red-on' : 'off' },
+                { label: 'Свет', cls: lightsOn ? 'green-on' : 'off' },
+                { label: 'Сигнал', cls: alarmSuccess ? 'green-on' : 'off' },
+              ].map(({ label, cls }) => (
+                <div className="indicator" key={label}>
+                  <div className={`indicator-light ${cls}`} />
+                  <div className="indicator-label">{label}</div>
+                </div>
+              ))}
             </div>
 
-            <div className="panel-controls">
-              {/* Indicator column */}
-              <div className="indicator-panel">
-                {[
-                  { label: 'Поезд', cls: phase === 'approaching' || phase === 'anomaly_window' ? 'amber-on' : 'green-on' },
-                  { label: 'Тревога', cls: isAnomaly && phase === 'anomaly_window' ? 'red-on' : 'off' },
-                  { label: 'Свет', cls: lightsOn ? 'green-on' : 'off' },
-                  { label: 'Сигнал', cls: alarmSuccess ? 'green-on' : 'off' },
-                ].map(({ label, cls }) => (
-                  <div className="indicator" key={label}>
-                    <div className={`indicator-light ${cls}`} />
-                    <div className="indicator-label">{label}</div>
-                  </div>
-                ))}
-              </div>
+            {/* Big action buttons */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+              <div className="section-label">Управление</div>
+              <button
+                className={`ctrl-btn btn-alarm ${isAnomaly && phase === 'anomaly_window' && !alarmSuccess ? 'pulsing' : ''}`}
+                onClick={handleAlarm}
+                style={{ minWidth: 148 }}
+              >
+                ⚠ Сигнализация
+              </button>
+              <button className="ctrl-btn btn-normal" onClick={handleNormal} style={{ minWidth: 148 }}>
+                ✓ Норма
+              </button>
+              <button className="ctrl-btn btn-light" onClick={handleToggleLights} style={{ minWidth: 148 }}>
+                {lightsOn ? '○ Свет выкл' : '● Свет вкл'}
+              </button>
+              <button className="ctrl-btn btn-log" onClick={() => { audio.playButtonClick(); addLog('Журнал обновлён. Дежурный в норме.'); }} style={{ minWidth: 148 }}>
+                ✎ Журнал
+              </button>
+            </div>
 
-              {/* Action buttons */}
-              <div className="btn-section">
-                <div className="section-label">Управление</div>
-                <button
-                  className={`ctrl-btn btn-alarm ${isAnomaly && phase === 'anomaly_window' && !alarmSuccess ? 'pulsing' : ''}`}
-                  onClick={handleAlarm}
-                >
-                  ⚠ Сигнализация
-                </button>
-                <button className="ctrl-btn btn-normal" onClick={handleNormal}>
-                  ✓ Норма
-                </button>
-                <button className="ctrl-btn btn-light" onClick={handleToggleLights}>
-                  {lightsOn ? '○ Свет выкл' : '● Свет вкл'}
-                </button>
-                <button className="ctrl-btn btn-log" onClick={() => {
-                  audio.playButtonClick();
-                  addLog('Журнал обновлён. Дежурный в норме.');
+            {/* Gauge column */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 110 }}>
+              <div className="section-label">Приближение</div>
+              <div className="gauge-bar">
+                <div className="gauge-fill approach" style={{ width: `${trainApproach}%` }} />
+              </div>
+              <div style={{ fontFamily: 'Oswald', fontSize: '0.58rem', color: 'rgba(160,130,65,0.55)', letterSpacing: '0.1em' }}>
+                {phase === 'waiting' ? 'ОЖИДАНИЕ' : phase === 'approaching' ? `${Math.round(trainApproach)}%` : phase === 'anomaly_window' ? 'ПРИБЫЛ' : 'ОТБЫЛ'}
+              </div>
+              <div style={{ marginTop: 6 }}>
+                <div className="section-label">Статус</div>
+                <div style={{
+                  fontFamily: 'Oswald', fontSize: '0.62rem', letterSpacing: '0.09em', marginTop: 3,
+                  color: isAnomaly ? '#ff4422' : '#44bb22',
+                  textShadow: isAnomaly ? '0 0 8px rgba(255,60,20,0.5)' : '0 0 5px rgba(50,200,80,0.4)',
                 }}>
-                  ✎ Журнал
-                </button>
-              </div>
-
-              {/* Gauge + status */}
-              <div className="gauge-section">
-                <div className="section-label">Приближение поезда</div>
-                <div className="gauge-bar">
-                  <div className="gauge-fill approach" style={{ width: `${trainApproach}%` }} />
-                </div>
-                <div style={{ fontFamily: 'Oswald', fontSize: '0.6rem', color: 'rgba(160,130,70,0.55)', letterSpacing: '0.1em' }}>
-                  {phase === 'waiting' ? 'ОЖИДАНИЕ' : phase === 'approaching' ? `${Math.round(trainApproach)}%` : phase === 'anomaly_window' ? 'ПРИБЫЛ' : 'ОТБЫЛ'}
-                </div>
-
-                <div style={{ marginTop: 8 }}>
-                  <div className="section-label">Аномалия</div>
-                  <div style={{
-                    fontFamily: 'Oswald', fontSize: '0.65rem', letterSpacing: '0.1em',
-                    color: isAnomaly ? '#ff4422' : '#44bb22',
-                    textShadow: isAnomaly ? '0 0 8px rgba(255,60,20,0.5)' : '0 0 6px rgba(50,200,80,0.4)',
-                    marginTop: 3,
-                  }}>
-                    {isAnomaly ? `⚠ ${ANOMALY_NAMES[anomalyType]}` : '✓ НЕТ'}
-                  </div>
-                </div>
-
-                <div style={{ marginTop: 6 }}>
-                  <div className="section-label">Уровень {gameState.level}</div>
-                  <div style={{ fontFamily: 'Oswald', fontSize: '0.58rem', color: 'rgba(140,110,55,0.5)' }}>
-                    {LEVELS.find(l => l.id === gameState.level)?.name} · Ночь
-                  </div>
+                  {isAnomaly ? `⚠ ${ANOMALY_NAMES[anomalyType]}` : '✓ НОРМА'}
                 </div>
               </div>
-
-              {/* Log */}
-              <div className="status-display">
-                {logs.slice(0, 8).map((log, i) => (
-                  <div key={i} className="status-line">
-                    <div className={`status-dot ${log.includes('⚠') || log.includes('warn') ? 'amber' : log.includes('✖') || log.includes('пропущ') ? 'red' : 'green'}`} />
-                    <span style={{ fontSize: '0.63rem', lineHeight: 1.3 }}>{log}</span>
-                  </div>
-                ))}
+              <div style={{ marginTop: 4 }}>
+                <div className="section-label">Уровень {gameState.level}</div>
+                <div style={{ fontFamily: 'Oswald', fontSize: '0.55rem', color: 'rgba(130,100,50,0.5)' }}>
+                  {LEVELS.find(l => l.id === gameState.level)?.name}
+                </div>
               </div>
+            </div>
+
+            {/* Log */}
+            <div className="status-display" style={{ flex: 1 }}>
+              {logs.slice(0, 8).map((log, i) => (
+                <div key={i} className="status-line">
+                  <div className={`status-dot ${log.includes('⚠') ? 'amber' : log.includes('✖') || log.includes('пропущ') || log.includes('Угроза') || log.includes('Опасность') ? 'red' : 'green'}`} />
+                  <span style={{ fontSize: '0.62rem', lineHeight: 1.3 }}>{log}</span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
+
       </div>
     </div>
   );
